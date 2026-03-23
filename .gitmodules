@@ -1,0 +1,3 @@
+[submodule "vlc-ios"]
+	path = vlc-ios
+	url = https://code.videolan.org/videolan/vlc-ios

@@ -50,19 +50,21 @@ jobs:
       # ── 5. Build archive (no signing) ────────────────────────────────────────
       - name: Build Xcode archive (unsigned)
         working-directory: vlc-ios
+        env:
+          # Default to Release when triggered by push (inputs are empty)
+          CONFIGURATION: ${{ github.event.inputs.configuration || 'Release' }}
         run: |
           xcodebuild archive \
             -workspace VLC.xcworkspace \
             -scheme VLC-iOS \
-            -configuration ${{ github.event.inputs.configuration }} \
+            -configuration "$CONFIGURATION" \
             -archivePath "$RUNNER_TEMP/VLC-iOS.xcarchive" \
             -destination "generic/platform=iOS" \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            DEVELOPMENT_TEAM="" \
-            | xcpretty || true
+            DEVELOPMENT_TEAM=""
 
           if [ ! -d "$RUNNER_TEMP/VLC-iOS.xcarchive" ]; then
             echo "Archive not found – build failed."
@@ -97,6 +99,6 @@ jobs:
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VLC-iOS-unsigned-${{ github.event.inputs.configuration }}-${{ github.run_number }}
+          name: VLC-iOS-unsigned-${{ github.event.inputs.configuration || 'Release' }}-${{ github.run_number }}
           path: ${{ env.IPA_PATH }}
           retention-days: 14

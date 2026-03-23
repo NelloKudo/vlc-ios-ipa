@@ -28,9 +28,9 @@ jobs:
         with:
           submodules: recursive
 
-      # ── 2. Select Xcode ──────────────────────────────────────────────────────
-      - name: Select Xcode 16
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+      # ── 2. Print Xcode version (uses runner default, avoids SDK/runtime mismatch) ─
+      - name: Print Xcode version
+        run: xcodebuild -version
 
       # ── 3. Install CocoaPods ─────────────────────────────────────────────────
       - name: Set up Ruby

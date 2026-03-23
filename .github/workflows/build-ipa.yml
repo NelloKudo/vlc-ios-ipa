@@ -1,0 +1,102 @@
+name: Build VLC iOS IPA (Unsigned)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'Build configuration'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
+
+jobs:
+  build:
+    name: Build unsigned IPA for SideStore
+    runs-on: macos-15
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ── 2. Select Xcode ──────────────────────────────────────────────────────
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+
+      # ── 3. Install CocoaPods ─────────────────────────────────────────────────
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: false
+
+      - name: Install CocoaPods
+        run: gem install cocoapods --no-document
+
+      # ── 4. Pod install ───────────────────────────────────────────────────────
+      - name: Install CocoaPods dependencies
+        working-directory: vlc-ios
+        run: pod install --repo-update
+
+      # ── 5. Build archive (no signing) ────────────────────────────────────────
+      - name: Build Xcode archive (unsigned)
+        working-directory: vlc-ios
+        run: |
+          xcodebuild archive \
+            -workspace VLC.xcworkspace \
+            -scheme VLC-iOS \
+            -configuration ${{ github.event.inputs.configuration }} \
+            -archivePath "$RUNNER_TEMP/VLC-iOS.xcarchive" \
+            -destination "generic/platform=iOS" \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM="" \
+            | xcpretty || true
+
+          if [ ! -d "$RUNNER_TEMP/VLC-iOS.xcarchive" ]; then
+            echo "Archive not found – build failed."
+            exit 1
+          fi
+
+      # ── 6. Package .app into unsigned IPA ────────────────────────────────────
+      #  SideStore / AltStore will re-sign the IPA with your personal Apple ID
+      #  when you install it, so no certificate is needed here.
+      - name: Package unsigned IPA
+        run: |
+          APP=$(find "$RUNNER_TEMP/VLC-iOS.xcarchive/Products/Applications" \
+                  -name "*.app" -maxdepth 1 | head -1)
+
+          if [ -z "$APP" ]; then
+            echo "No .app found inside archive."
+            exit 1
+          fi
+
+          PAYLOAD_DIR="$RUNNER_TEMP/Payload"
+          mkdir -p "$PAYLOAD_DIR"
+          cp -r "$APP" "$PAYLOAD_DIR/"
+
+          IPA_PATH="$RUNNER_TEMP/VLC-iOS-unsigned.ipa"
+          cd "$RUNNER_TEMP"
+          zip -qr "$IPA_PATH" Payload/
+
+          echo "IPA_PATH=$IPA_PATH" >> "$GITHUB_ENV"
+          echo "Packaged IPA: $IPA_PATH ($(du -sh "$IPA_PATH" | cut -f1))"
+
+      # ── 7. Upload artifact ────────────────────────────────────────────────────
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VLC-iOS-unsigned-${{ github.event.inputs.configuration }}-${{ github.run_number }}
+          path: ${{ env.IPA_PATH }}
+          retention-days: 14

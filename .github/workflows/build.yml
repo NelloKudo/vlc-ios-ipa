@@ -1,0 +1,58 @@
+name: Build VLC-iOS IPA
+
+on:
+  workflow_dispatch:
+  schedule:
+    # runs weekly on mondays, remove if u don't want that
+    - cron: '0 6 * * 1'
+
+jobs:
+  build:
+    name: Build VLC-iOS
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout vlc-ios from GitLab
+        run: |
+          git clone --depth=1 https://code.videolan.org/videolan/vlc-ios.git vlc-ios
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+
+      - name: Install CocoaPods dependencies
+        working-directory: vlc-ios
+        run: |
+          gem install cocoapods --no-document 2>/dev/null || true
+          pod install --repo-update
+
+      - name: Build archive (unsigned)
+        working-directory: vlc-ios
+        run: |
+          xcodebuild archive \
+            -workspace VLC.xcworkspace \
+            -scheme "VLC for iOS" \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/VLC.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            | xcpretty || true
+
+      - name: Export IPA (unsigned)
+        run: |
+          mkdir -p "$RUNNER_TEMP/ipa"
+          # pull the .app out of the archive and repack as IPA manually
+          APP_PATH=$(find "$RUNNER_TEMP/VLC.xcarchive/Products" -name "*.app" | head -1)
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -r "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          zip -r "$RUNNER_TEMP/VLC.ipa" Payload
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VLC-iOS-unsigned
+          path: ${{ runner.temp }}/VLC.ipa
+          retention-days: 7

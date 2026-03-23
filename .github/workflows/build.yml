@@ -14,8 +14,7 @@ jobs:
 
     steps:
       - name: Checkout vlc-ios from GitLab
-        run: |
-          git clone --depth=1 https://code.videolan.org/videolan/vlc-ios.git vlc-ios
+        run: git clone --depth=1 https://code.videolan.org/videolan/vlc-ios.git vlc-ios
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.2.app
@@ -26,29 +25,53 @@ jobs:
           gem install cocoapods --no-document 2>/dev/null || true
           pod install --repo-update
 
+      - name: List available schemes
+        working-directory: vlc-ios
+        run: xcodebuild -workspace VLC.xcworkspace -list
+
+      - name: Detect iOS scheme
+        working-directory: vlc-ios
+        run: |
+          # grab first scheme that looks like the iOS app (not tvOS, not tests)
+          SCHEME=$(xcodebuild -workspace VLC.xcworkspace -list 2>/dev/null \
+            | grep -E '^\s+VLC' \
+            | grep -iv 'tvos\|tv\|test\|tests' \
+            | head -1 \
+            | xargs)
+          echo "Detected scheme: '$SCHEME'"
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+
       - name: Build archive (unsigned)
         working-directory: vlc-ios
         run: |
+          set -o pipefail
           xcodebuild archive \
             -workspace VLC.xcworkspace \
-            -scheme "VLC for iOS" \
+            -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
+            -destination "generic/platform=iOS" \
             -archivePath "$RUNNER_TEMP/VLC.xcarchive" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            | xcpretty || true
+            ENABLE_BITCODE=NO \
+            | xcpretty
 
-      - name: Export IPA (unsigned)
+      - name: Repack as IPA
         run: |
-          mkdir -p "$RUNNER_TEMP/ipa"
-          # pull the .app out of the archive and repack as IPA manually
           APP_PATH=$(find "$RUNNER_TEMP/VLC.xcarchive/Products" -name "*.app" | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No .app found in archive. Listing archive contents:"
+            find "$RUNNER_TEMP/VLC.xcarchive" -maxdepth 4
+            exit 1
+          fi
+          echo "Found app: $APP_PATH"
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -r "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
           cd "$RUNNER_TEMP/ipa"
           zip -r "$RUNNER_TEMP/VLC.ipa" Payload
+          echo "IPA size: $(du -sh "$RUNNER_TEMP/VLC.ipa" | cut -f1)"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4

@@ -1,0 +1,119 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'Build configuration'
+        required: false
+        default: 'Release'
+        type: choice
+        options: [Release, Debug]
+      scheme:
+        description: 'Scheme to build'
+        required: false
+        default: 'VLC-iOS-no-watch'
+        type: choice
+        options: [VLC-iOS-no-watch, VLC-iOS]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CONFIGURATION: ${{ inputs.configuration || 'Release' }}
+  SCHEME: ${{ inputs.scheme || 'VLC-iOS-no-watch' }}
+  WORKSPACE: VLC.xcworkspace
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Fetch vlc-ios
+        run: |
+          git submodule update --init --depth 1 --recursive --remote vlc-ios
+          cd vlc-ios
+          echo "VLC_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Cache Pods
+        uses: actions/cache@v6
+        with:
+          path: |
+            vlc-ios/Pods
+            ~/.cocoapods/repos
+          key: pods-${{ runner.os }}-${{ hashFiles('vlc-ios/Podfile.lock') }}
+          restore-keys: pods-${{ runner.os }}-
+
+      - name: Cache DerivedData
+        uses: actions/cache@v6
+        with:
+          path: ~/DerivedData
+          key: dd-${{ runner.os }}-${{ env.SCHEME }}-${{ env.CONFIGURATION }}-${{ env.VLC_SHA }}
+          restore-keys: |
+            dd-${{ runner.os }}-${{ env.SCHEME }}-${{ env.CONFIGURATION }}-
+
+      - name: Install pods
+        working-directory: vlc-ios
+        run: |
+          pod --version || gem install cocoapods --no-document
+          pod install --deployment || pod install --repo-update
+
+      - name: Build
+        working-directory: vlc-ios
+        run: |
+          xcodebuild -version
+          xcodebuild build \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath ~/DerivedData \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            -quiet \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            ONLY_ACTIVE_ARCH=NO \
+            DEBUG_INFORMATION_FORMAT=dwarf \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            BUNDLE_IDENTIFIER_PREFIX=org.videolan
+
+      - name: Package IPA
+        run: |
+          APP=$(find ~/DerivedData/Build/Products/"$CONFIGURATION"-iphoneos -maxdepth 1 -name '*.app' | head -1)
+          if [ -z "$APP" ]; then
+            echo "no .app was produced"
+            exit 1
+          fi
+          rm -rf "$RUNNER_TEMP/Payload"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/Payload/"
+          rm -rf "$RUNNER_TEMP/Payload"/*.app/_CodeSignature
+          IPA="$RUNNER_TEMP/VLC-iOS-${VLC_SHA}-unsigned.ipa"
+          (cd "$RUNNER_TEMP" && zip -qry "$IPA" Payload)
+          echo "IPA=$IPA" >> "$GITHUB_ENV"
+          ls -lh "$IPA"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          path: ${{ env.IPA }}
+          archive: false
+          retention-days: 30
+          overwrite: true
